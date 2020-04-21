@@ -18,7 +18,6 @@
 #include <fcntl.h>
 #include <linux/magic.h>
 #include <stdio.h>
-#include <sys/capability.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
@@ -34,11 +33,11 @@
 
 #include <glog/logging.h>
 #include "pathauditor/util/path.h"
+#include "pathauditor/util/cleanup.h"
 #include "absl/container/fixed_array.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "pathauditor/util/cleanup.h"
 #include "pathauditor/util/canonical_errors.h"
 #include "pathauditor/util/status.h"
 #include "pathauditor/util/status_macros.h"
@@ -53,6 +52,10 @@
 
 #ifndef FS_IMMUTABLE_FL
 #define FS_IMMUTABLE_FL 16
+#endif
+
+#ifndef CGROUP2_SUPER_MAGIC
+#define CGROUP2_SUPER_MAGIC 0x63677270
 #endif
 
 namespace pathauditor {
@@ -222,7 +225,7 @@ StatusOr<bool> PathIsUserControlled(const ProcessInformation &proc_info,
 
   std::deque<std::string> path_queue = absl::StrSplit(path, '/', absl::SkipEmpty());
 
-  for (int i = 0; i < max_iteration_count; i++) {
+  for (size_t i = 0; i < max_iteration_count; i++) {
     if (path_queue.empty()) {
       return false;
     }
@@ -291,7 +294,7 @@ StatusOr<bool> PathIsUserControlled(const ProcessInformation &proc_info,
           return FailedPreconditionError(
               absl::StrCat("Could not read link for path element ", elem));
         }
-        if (link_len >= link_buf.memsize()) {
+        if ((size_t)link_len >= link_buf.memsize()) {
           return FailedPreconditionError(
               absl::StrCat("Link is larger than PATH_MAX ",
                            std::string(link_buf.data(), link_buf.memsize())));
@@ -387,6 +390,7 @@ StatusOr<bool> FileEventIsUserControlled(
       }
       break;
     }
+#ifdef SYS_execveat
     case SYS_execveat: {
       PATHAUDITOR_ASSIGN_OR_RETURN(fd_arg, event.Arg(0));
       PATHAUDITOR_ASSIGN_OR_RETURN(int flags, event.Arg(4));
@@ -402,6 +406,7 @@ StatusOr<bool> FileEventIsUserControlled(
       }
       break;
     }
+#endif
     case SYS_execve: {
       StatusOr<bool> result = FileIsUserWritable(proc_info, path);
       if (result.ok() && *result) {
